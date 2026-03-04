@@ -5,17 +5,12 @@ import {
   AlertCircle, Plus, CheckCircle2, Package,
   MessageCircle, Send, ArrowLeft, Trash2, Minus, X,
   Truck, MapPinned, Phone, Edit3, Lock, Bell, Info,
-  BarChart3, Store, DollarSign, Zap, Settings, Download
+  BarChart3, Store, DollarSign, Zap, Settings, Download, Loader
 } from 'lucide-react';
 import './index.css';
+import * as fb from './firebase';
 
-// --- MOCK DATA ---
-const MOCK_BIKES = [
-  { id: 'b1', brand: 'Honda', model: 'Vario 150', year: 2018 },
-  { id: 'b2', brand: 'Yamaha', model: 'NMAX 155', year: 2020 },
-  { id: 'b3', brand: 'Kawasaki', model: 'Ninja 250 FI', year: 2019 },
-];
-
+// --- CATEGORIES CONFIGURATION ---
 const CATEGORIES = [
   { id: 'all', name: 'Semua', icon: Package },
   { id: 'pengereman', name: 'Pengereman', icon: AlertCircle },
@@ -23,49 +18,11 @@ const CATEGORIES = [
   { id: 'kelistrikan', name: 'Kelistrikan', icon: Search },
 ];
 
-const MOCK_PRODUCTS = [
-  { 
-    id: 'p1', name: 'Kampas Rem Depan Original (Pad Set)', oemCode: '06455-K59-A71', 
-    price: 55000, category: 'pengereman', compatibleBikes: ['b1'], 
-    rating: 4.8, sold: 1250, shop: 'Astra Motor Official', isOriginal: true,
-    distance: 2.5,
-    image: 'https://images.unsplash.com/photo-1629897148566-6b2158654c60?auto=format&fit=crop&q=80&w=300&h=300'
-  },
-  { 
-    id: 'p2', name: 'V-Belt CVT Bando Racing', oemCode: '23100-K36-J01', 
-    price: 125000, category: 'penggerak', compatibleBikes: ['b1'], 
-    rating: 4.9, sold: 850, shop: 'Maju Jaya Part', isOriginal: false,
-    distance: 12.0,
-    image: 'https://images.unsplash.com/photo-1590634567280-f80e7d58a8a4?auto=format&fit=crop&q=80&w=300&h=300'
-  },
-  { 
-    id: 'p3', name: 'Kampas Rem Belakang', oemCode: '3C1-F530K-00', 
-    price: 65000, category: 'pengereman', compatibleBikes: ['b2'], 
-    rating: 4.7, sold: 430, shop: 'Yamaha Putera', isOriginal: true,
-    distance: 4.8,
-    image: 'https://images.unsplash.com/photo-1629897148566-6b2158654c60?auto=format&fit=crop&q=80&w=300&h=300'
-  },
-  { 
-    id: 'p4', name: 'Busi Iridium NGK CPR9EAIX-9', oemCode: 'CPR9EAIX-9', 
-    price: 95000, category: 'kelistrikan', compatibleBikes: ['b1', 'b2'], 
-    rating: 5.0, sold: 2100, shop: 'Toko Busi JKT', isOriginal: true,
-    distance: 22.5,
-    image: 'https://images.unsplash.com/photo-1605274280925-9cb14dfcf6b9?auto=format&fit=crop&q=80&w=300&h=300'
-  },
-  { 
-    id: 'p5', name: 'Filter Oli Original', oemCode: '16097-0008', 
-    price: 85000, category: 'penggerak', compatibleBikes: ['b3'], 
-    rating: 4.9, sold: 320, shop: 'Kawasaki Suramadu', isOriginal: true,
-    distance: 8.0,
-    image: 'https://images.unsplash.com/photo-1590634567280-f80e7d58a8a4?auto=format&fit=crop&q=80&w=300&h=300'
-  },
-];
-
 export default function App() {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
   const [activeTab, setActiveTab] = useState('home');
-  const [myGarage, setMyGarage] = useState([MOCK_BIKES[0]]);
-  const [selectedBikeId, setSelectedBikeId] = useState(MOCK_BIKES[0].id);
+  const [myGarage, setMyGarage] = useState([]);
+  const [selectedBikeId, setSelectedBikeId] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [maxRadius, setMaxRadius] = useState('all');
@@ -74,18 +31,12 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [showLogin, setShowLogin] = useState(false);
   const [loginForm, setLoginForm] = useState({ email: '', password: '', userType: 'buyer' });
+  const [isLoading, setIsLoading] = useState(false);
+  const [firebaseError, setFirebaseError] = useState(null);
 
   const [activeChatShop, setActiveChatShop] = useState(null);
   const [newMessage, setNewMessage] = useState('');
-  const [chatHistory, setChatHistory] = useState([
-    { 
-      shop: 'Astra Motor Official', 
-      messages: [
-        { id: 1, text: 'Halo, kampas rem Vario 150 ready?', sender: 'user', time: '10:00' }, 
-        { id: 2, text: 'Ready kak, ori AHM. Silakan diorder ya.', sender: 'shop', time: '10:05' }
-      ] 
-    }
-  ]);
+  const [chatHistory, setChatHistory] = useState([]);
 
   const selectedBike = myGarage.find(b => b.id === selectedBikeId) || null;
 
@@ -99,18 +50,30 @@ export default function App() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  // Load products from Firebase
+  const [products, setProducts] = useState([]);
+  
+  useEffect(() => {
+    if (isFirebaseConfigured()) {
+      const unsubscribe = fb.onProductsChange((loadedProducts) => {
+        setProducts(loadedProducts);
+      });
+      return unsubscribe;
+    }
+  }, []);
+
   const filteredProducts = useMemo(() => {
-    return MOCK_PRODUCTS.filter(product => {
-      const matchesBike = selectedBike ? product.compatibleBikes.includes(selectedBike.id) : true;
+    return products.filter(product => {
+      const matchesBike = selectedBike ? product.compatibleBikes?.includes(selectedBike.id) : true;
       const matchesSearch = 
         product.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-        product.oemCode.toLowerCase().includes(searchQuery.toLowerCase());
+        product.oemCode?.toLowerCase().includes(searchQuery.toLowerCase());
       const matchesCategory = selectedCategory === 'all' || product.category === selectedCategory;
       const matchesRadius = maxRadius === 'all' || product.distance <= parseInt(maxRadius);
 
       return matchesBike && matchesSearch && matchesCategory && matchesRadius;
     });
-  }, [selectedBike, searchQuery, selectedCategory, maxRadius]);
+  }, [products, selectedBike, searchQuery, selectedCategory, maxRadius]);
 
   const handleAddToCart = (product) => {
     setCartItems(prev => {
@@ -147,22 +110,61 @@ export default function App() {
   const cartTotal = cartItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
   const cartCount = cartItems.length;
 
-  const handleLogin = (e) => {
+  // Check if Firebase is configured
+  const isFirebaseConfigured = () => {
+    return import.meta.env.VITE_FIREBASE_API_KEY && 
+           !import.meta.env.VITE_FIREBASE_API_KEY.includes('YOUR_');
+  };
+
+  const handleLogin = async (e) => {
     e.preventDefault();
-    if (loginForm.email && loginForm.password) {
-      setCurrentUser({
-        email: loginForm.email,
-        userType: loginForm.userType,
-        name: loginForm.email.split('@')[0]
-      });
+    if (!loginForm.email || !loginForm.password) return;
+
+    setIsLoading(true);
+    setFirebaseError(null);
+
+    try {
+      if (isFirebaseConfigured()) {
+        // Use Firebase authentication
+        await fb.loginUser(loginForm.email, loginForm.password).then((user) => {
+          setCurrentUser({
+            email: user.email,
+            userType: user.userType,
+            name: user.name,
+            uid: user.uid
+          });
+        });
+      } else {
+        // Use mock authentication
+        setCurrentUser({
+          email: loginForm.email,
+          userType: loginForm.userType,
+          name: loginForm.email.split('@')[0],
+          uid: 'mock-user-' + Date.now()
+        });
+      }
       setShowLogin(false);
       setLoginForm({ email: '', password: '', userType: 'buyer' });
+    } catch (error) {
+      setFirebaseError(error.message || 'Login gagal. Periksa email dan password Anda.');
+      console.error('Login error:', error);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const handleLogout = () => {
-    setCurrentUser(null);
-    setActiveTab('home');
+  const handleLogout = async () => {
+    try {
+      if (isFirebaseConfigured()) {
+        await fb.logoutUser();
+      }
+      setCurrentUser(null);
+      setCartItems([]);
+      setActiveTab('home');
+      setFirebaseError(null);
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
   };
 
   const handleStartChat = (shopName) => {
@@ -554,6 +556,23 @@ export default function App() {
       <div className={`bg-white rounded-2xl shadow-2xl p-6 ${isMobile ? 'w-96 max-w-[calc(100%-2rem)]' : 'w-full max-w-md'}`}>
         <h1 className="text-2xl font-bold text-slate-800 mb-6">Masuk OtoParts</h1>
         
+        {firebaseError && (
+          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+            <p className="text-sm text-red-700 flex items-center gap-2">
+              <AlertCircle size={16} />
+              {firebaseError}
+            </p>
+          </div>
+        )}
+
+        {!isFirebaseConfigured() && (
+          <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+            <p className="text-xs text-blue-700">
+              <span className="font-medium">Mode Demo:</span> Firebase belum dikonfigurasi. Menggunakan data lokal.
+            </p>
+          </div>
+        )}
+        
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-2">Tipe Pengguna</label>
@@ -564,6 +583,7 @@ export default function App() {
                   value="buyer"
                   checked={loginForm.userType === 'buyer'}
                   onChange={(e) => setLoginForm({...loginForm, userType: e.target.value})}
+                  disabled={isLoading}
                   className="w-4 h-4"
                 />
                 <span className="ml-2 text-sm text-slate-700">Pembeli</span>
@@ -574,6 +594,7 @@ export default function App() {
                   value="seller"
                   checked={loginForm.userType === 'seller'}
                   onChange={(e) => setLoginForm({...loginForm, userType: e.target.value})}
+                  disabled={isLoading}
                   className="w-4 h-4"
                 />
                 <span className="ml-2 text-sm text-slate-700">Penjual</span>
@@ -588,7 +609,8 @@ export default function App() {
               value={loginForm.email}
               onChange={(e) => setLoginForm({...loginForm, email: e.target.value})}
               placeholder="contoh@email.com"
-              className="w-full border border-slate-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-red-500 outline-none"
+              disabled={isLoading}
+              className="w-full border border-slate-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-red-500 outline-none disabled:bg-slate-100"
             />
           </div>
           
@@ -599,21 +621,34 @@ export default function App() {
               value={loginForm.password}
               onChange={(e) => setLoginForm({...loginForm, password: e.target.value})}
               placeholder="••••••••"
-              className="w-full border border-slate-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-red-500 outline-none"
+              disabled={isLoading}
+              className="w-full border border-slate-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-red-500 outline-none disabled:bg-slate-100"
             />
           </div>
           
           <button
             type="submit"
-            className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 rounded-lg transition-colors"
+            disabled={isLoading}
+            className="w-full bg-red-600 hover:bg-red-700 disabled:bg-red-400 text-white font-bold py-2 rounded-lg transition-colors flex items-center justify-center gap-2"
           >
-            Masuk
+            {isLoading ? (
+              <>
+                <Loader size={18} className="animate-spin" />
+                Sedang login...
+              </>
+            ) : (
+              'Masuk'
+            )}
           </button>
         </form>
         
         <button
-          onClick={() => setShowLogin(false)}
-          className="w-full mt-3 text-slate-600 hover:text-slate-800 font-medium transition-colors"
+          onClick={() => {
+            setShowLogin(false);
+            setFirebaseError(null);
+          }}
+          disabled={isLoading}
+          className="w-full mt-3 text-slate-600 hover:text-slate-800 font-medium transition-colors disabled:text-slate-400"
         >
           Batal
         </button>
@@ -842,9 +877,15 @@ export default function App() {
       </div>
 
       <h3 className="font-bold text-slate-800 mb-3">Daftar Kendaraan</h3>
+      {myGarage.length === 0 ? (
+        <div className="text-center py-8 bg-slate-50 rounded-lg border border-dashed border-slate-300">
+          <Wrench className="mx-auto text-slate-300 mb-3" size={40} />
+          <p className="text-slate-600 font-medium">Garasi Kosong</p>
+          <p className="text-sm text-slate-500 mt-1">Tambahkan motor Anda untuk mulai berbelanja</p>
+        </div>
+      ) : (
       <div className={`${isMobile ? 'space-y-3' : 'grid grid-cols-2 lg:grid-cols-3 gap-4'}`}>
-        {MOCK_BIKES.map(bike => {
-          const isSaved = myGarage.some(b => b.id === bike.id);
+        {myGarage.map(bike => {
           const isActive = selectedBikeId === bike.id;
           
           return (
@@ -863,7 +904,7 @@ export default function App() {
                   <p className="text-sm text-slate-500">Tahun: {bike.year}</p>
                 </div>
                 
-                {isSaved ? (
+                <div className="flex gap-2">
                   <button 
                     onClick={() => setSelectedBikeId(bike.id)}
                     className={`text-xs font-medium px-3 py-1.5 rounded-lg ${
@@ -872,19 +913,19 @@ export default function App() {
                   >
                     {isActive ? 'Sedang Dipakai' : 'Gunakan'}
                   </button>
-                ) : (
                   <button 
-                    onClick={() => setMyGarage([...myGarage, bike])}
+                    onClick={() => setMyGarage(myGarage.filter(b => b.id !== bike.id))}
                     className="text-xs font-medium px-3 py-1.5 rounded-lg bg-red-100 text-red-700 hover:bg-red-200"
                   >
-                    Simpan
+                    Hapus
                   </button>
-                )}
+                </div>
               </div>
             </div>
           );
         })}
       </div>
+      )}
     </div>
   );
 
